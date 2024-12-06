@@ -56,7 +56,8 @@ def setup_mininet():
     info("Criando switches...\n")
     s1 = net.addSwitch('s1')
     s2 = net.addSwitch('s2')
-    
+    s3 = net.addSwitch('s3')
+
     info("Criando hosts...\n")
     h1 = net.addHost('h1', ip='10.0.0.1')
     h2 = net.addHost('h2', ip='10.0.0.2')
@@ -64,7 +65,8 @@ def setup_mininet():
     info("Criando links...\n")
     net.addLink(h1, s1, bw=10, delay='5ms')
     net.addLink(h2, s2, bw=10, delay='5ms')
-    net.addLink(s1, s2, bw=20, delay='2ms')
+    net.addLink(s1, s3, bw=20, delay='2ms')
+    net.addLink(s2, s3, bw=20, delay='2ms')
 
     info("Iniciando a rede...\n")
     net.start()
