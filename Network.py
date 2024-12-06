@@ -68,7 +68,7 @@ def setup_mininet():
     net.addLink(s1, s3, bw=20, delay='2ms')
     net.addLink(s2, s3, bw=20, delay='2ms')
 
-    info("Iniciando a rede...\n")
+    info("Iniciando a rede... \n")
     net.start()
     
     info("Testando conectividade...\n")
