@@ -3,7 +3,7 @@ import time
 import signal
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_0
 from mininet.net import Mininet
@@ -16,51 +16,66 @@ from mininet.cli import CLI
 ryu_running = True
 
 # Classe do controlador Ryu
-class L2Switch(app_manager.RyuApp):
+class MACMonitor(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(L2Switch, self).__init__(*args, **kwargs)
+        super(MACMonitor, self).__init__(*args, **kwargs)
+        self.mac_table = {}  # Dicionário para rastrear pacotes e endereços MAC
+
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        dp = ev.msg.datapath
+        self.logger.info(f"Switch {dp.id} registrado no controlador.")
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         msg = ev.msg
         dp = msg.datapath
+        pkt = msg.data
+
+        src_mac = pkt[6:12].hex()
+        dst_mac = pkt[0:6].hex()
+
+        self.logger.info(f"Pacote recebido: SRC={src_mac}, DST={dst_mac}")
+
+        # Atualizar a tabela MAC com contagem de pacotes
+        if src_mac not in self.mac_table:
+            self.mac_table[src_mac] = 0
+        self.mac_table[src_mac] += 1
+
+        self.logger.info(f"Endereço MAC {src_mac} enviou {self.mac_table[src_mac]} pacotes.")
+
+        # Ações de flooding para pacotes desconhecidos
         ofp = dp.ofproto
         ofp_parser = dp.ofproto_parser
-
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
-
-        data = None
-        if msg.buffer_id == ofp.OFP_NO_BUFFER:
-            data = msg.data
 
         out = ofp_parser.OFPPacketOut(
             datapath=dp, buffer_id=msg.buffer_id, in_port=msg.in_port,
-            actions=actions, data=data)
+            actions=actions, data=msg.data)
         dp.send_msg(out)
 
 # Função para inicializar o Ryu em uma thread separada
 def start_ryu_controller():
     global ryu_running
-    while ryu_running:
-        app_manager.AppManager.run_apps(['__main__'])
+    app_manager.AppManager.run_apps(['__main__'])
 
 # Função para configurar e rodar o Mininet
 def setup_mininet():
     net = Mininet(controller=RemoteController, host=CPULimitedHost, link=TCLink)
-    
+
     info("Criando controlador remoto...\n")
     ryu_controller = net.addController('ryu', controller=RemoteController, ip='127.0.0.1', port=6633)
-    
+
     info("Criando switches...\n")
     s1 = net.addSwitch('s1')
     s2 = net.addSwitch('s2')
-    
+
     info("Criando hosts...\n")
     h1 = net.addHost('h1', ip='10.0.0.1')
     h2 = net.addHost('h2', ip='10.0.0.2')
-    
+
     info("Criando links...\n")
     net.addLink(h1, s1, bw=10, delay='5ms')
     net.addLink(h2, s2, bw=10, delay='5ms')
@@ -68,13 +83,13 @@ def setup_mininet():
 
     info("Iniciando a rede...\n")
     net.start()
-    
+
     info("Testando conectividade...\n")
     net.pingAll()
-    
+
     info("Iniciando o CLI...\n")
     CLI(net)
-    
+
     info("Parando a rede...\n")
     net.stop()
 
@@ -96,9 +111,9 @@ if __name__ == '__main__':
     info("Iniciando controlador Ryu...\n")
     ryu_thread = threading.Thread(target=start_ryu_controller, daemon=True)
     ryu_thread.start()
-    
+
     # Aguardar alguns segundos para o controlador iniciar
     time.sleep(5)
-    
+
     # Configurar e iniciar o Mininet
     setup_mininet()
