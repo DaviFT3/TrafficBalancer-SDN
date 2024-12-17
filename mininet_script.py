@@ -21,8 +21,8 @@ def setup_mininet():
         host = net.addHost(f'h{i}', ip=f'10.0.0.{i}', mac=f'00:00:00:00:00:{i:02x}')
         hosts.append(host)
 
-    
-    info("Desativando IPv6 nos hosts...\n")
+
+    info("Desativando IPv6 nos hosts...\n") #nao sei se eh opcional de primeiro momento desativei
     for host in hosts:
         host.cmd('sysctl -w net.ipv6.conf.all.disable_ipv6=1')
         host.cmd('sysctl -w net.ipv6.conf.default.disable_ipv6=1')
