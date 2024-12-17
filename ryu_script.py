@@ -9,12 +9,12 @@ class MACMonitor(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(MACMonitor, self).__init__(*args, **kwargs)
-        self.mac_table = {}  # Dicionário para rastrear pacotes e endereços MAC
+        self.mac_table = {}  #Dicionário para rastrear pacotes e endereços MAC
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         dp = ev.msg.datapath
-        self.logger.info(f"Switch {dp.id} registrado no controlador.\n")
+        #self.logger.info(f"Switch {dp.id} adicionado no controlador.\n")
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -29,12 +29,14 @@ class MACMonitor(app_manager.RyuApp):
         ethertype = int.from_bytes(pkt[12:14], byteorder='big')
         if ethertype == 0x0806:  # ARP
             self.logger.info("Pacote ARP capturado.")
-
-        if ethertype == 0x88cc:  # LLDP
-            self.logger.info("Pacote LLDP capturado.\n\n")
             
+            # Verificando se é ICMP
+        elif ethertype == 0x0800:
+            self.logger.info("Pacote ICMP capturado.")
 
-
+        else:
+            self.logger.info(f"Pacote desconhecido com ethertype: {hex(ethertype)}")
+            
         self.logger.info(f"Pacote recebido: SRC={src_mac}, DST={dst_mac}")
 
         # Atualizar a tabela MAC com contagem de pacotes
