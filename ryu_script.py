@@ -27,17 +27,20 @@ class MACMonitor(app_manager.RyuApp):
         pkt = msg.data
         #ip
         pktIP = packet.Packet(msg.data)
-        eth = pktIP.get_protocol(ethernet.ethernet)
+        # eth = pktIP.get_protocol(ethernet.ethernet)
 
         # Se for IPv4, registre o fluxo
         ip = pktIP.get_protocol(ipv4.ipv4)
         if ip:
             flow_key = (ip.src, ip.dst)
+            self.logger.info(f"IPv4: SRC={ip.src}, DST={ip.dst}")
             if flow_key not in self.flow_table:
                 self.flow_table[flow_key] = 0
             self.flow_table[flow_key] += 1
 
             self.logger.info(f"Fluxo {flow_key} registrou {self.flow_table[flow_key]} pacotes.")
+        else:
+            self.logger.info("Nenhum pacote IPv4 detectado.")
 
 
         src_mac = pkt[6:12].hex()
@@ -46,7 +49,7 @@ class MACMonitor(app_manager.RyuApp):
         # Filtrando trafego 
         ethertype = int.from_bytes(pkt[12:14], byteorder='big')
         if ethertype == 0x0806:  # ARP
-            return
+            
             self.logger.info("Pacote ARP capturado.")
             
         # Verificando se é ICMP
