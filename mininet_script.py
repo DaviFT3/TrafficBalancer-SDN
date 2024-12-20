@@ -47,9 +47,6 @@ def setup_mininet():
     info("Iniciando a rede...\n")
     net.start()
 
-    info("Testando conectividade...\n")
-    net.pingAll()
-
     info("Iniciando o CLI...\n")
     CLI(net)
 
