@@ -33,13 +33,14 @@ class balancingLoad(app_manager.RyuApp):
         ip = pktIP.get_protocol(ipv4.ipv4)
         if ip:
             flow_key = (ip.src, ip.dst)
-            #self.logger.info(f"SRC={ip.src}, DST={ip.dst}")
-            if flow_key not in self.flow_table:
-                self.flow_table[flow_key] = {'count': 0, 'bytes': 0}
-            self.flow_table[flow_key]['count'] += 1
-            self.flow_table[flow_key]['bytes'] += len(pkt)  # Contando os bytes
+        if flow_key not in self.flow_table:
+            self.flow_table[flow_key] = {'count': 0, 'bytes': 0}
+        self.flow_table[flow_key]['count'] += 1
+        self.flow_table[flow_key]['bytes'] += len(pkt)  # Contando os bytes
 
-            self.logger.info(f"{flow_key} registrou {self.flow_table[flow_key]['count']} pacotes, {self.flow_table[flow_key]['bytes']} bytes.")
+        # Logando estatísticas do fluxo
+        self.logger.info(f"Fluxo {flow_key}: {self.flow_table[flow_key]['count']} pacotes, "
+                         f"{self.flow_table[flow_key]['bytes']} bytes.")
 
         src_mac = pkt[6:12].hex()
         dst_mac = pkt[0:6].hex()

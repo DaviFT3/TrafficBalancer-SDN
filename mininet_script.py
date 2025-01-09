@@ -42,8 +42,6 @@ def setup_mininet():
     for i in range(6, 9):  # h7, h8, h9 -> s3
         net.addLink(hosts[i], s3, bw=10, delay='5ms')
     
-
-
     info("Iniciando a rede...\n")
     net.start()
 
