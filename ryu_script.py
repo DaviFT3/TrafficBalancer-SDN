@@ -1,3 +1,4 @@
+import time
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
@@ -13,6 +14,8 @@ class balancingLoad(app_manager.RyuApp):
         super(balancingLoad, self).__init__(*args, **kwargs)
         self.mac_table = {}  #Dicionário para rastrear pacotes e endereços MAC
         self.flow_table = {}  # Dicionário para rastrear tráfego por fluxo
+        self.flow_latency = {}  # Armazenar latências por fluxo
+        self.flow_throughput = {}  # Armazenar throughput por fluxo
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -25,46 +28,64 @@ class balancingLoad(app_manager.RyuApp):
         msg = ev.msg
         dp = msg.datapath
         pkt = msg.data
-        #ip
+
+        # Parsing do pacote para extrair informações IP
         pktIP = packet.Packet(msg.data)
-        # eth = pktIP.get_protocol(ethernet.ethernet)
-
-        # Se for IPv4, registre o fluxo
         ip = pktIP.get_protocol(ipv4.ipv4)
-        if ip:
+
+        if ip:  # Apenas IPv4
             flow_key = (ip.src, ip.dst)
-            #self.logger.info(f"SRC={ip.src}, DST={ip.dst}")
+
+            # Inicializar o fluxo se não existir
             if flow_key not in self.flow_table:
-                self.flow_table[flow_key] = {'count': 0, 'bytes': 0}
+                self.flow_table[flow_key] = {
+                    'count': 0,
+                    'bytes': 0,
+                    'first_seen': time.time(),
+                    'last_seen': time.time(),
+                }
+
+            # Atualizar contagem e bytes
             self.flow_table[flow_key]['count'] += 1
-            self.flow_table[flow_key]['bytes'] += len(pkt)  # Contando os bytes
+            self.flow_table[flow_key]['bytes'] += len(pkt)
 
-            self.logger.info(f"{flow_key} registrou {self.flow_table[flow_key]['count']} pacotes, {self.flow_table[flow_key]['bytes']} bytes.")
+            # Calcular latência
+            current_time = time.time()
+            last_seen = self.flow_table[flow_key]['last_seen']
+            latency = current_time - last_seen
+            self.flow_table[flow_key]['last_seen'] = current_time
 
+            # Calcular throughput (em Mbps)
+            elapsed_time = current_time - self.flow_table[flow_key]['first_seen']
+            throughput = (self.flow_table[flow_key]['bytes'] * 8) / (elapsed_time * 10**6) if elapsed_time > 0 else 0
+
+            self.logger.info(f"Fluxo {flow_key} - "
+                            f"Pacotes: {self.flow_table[flow_key]['count']}, "
+                            f"Bytes: {self.flow_table[flow_key]['bytes']}, "
+                            f"Latência: {latency:.6f} s, "
+                            f"Throughput: {throughput:.2f} Mbps")
+
+        # Parsing MAC e Ethertype
         src_mac = pkt[6:12].hex()
         dst_mac = pkt[0:6].hex()
-
-        # Filtrando trafego 
         ethertype = int.from_bytes(pkt[12:14], byteorder='big')
-        if ethertype == 0x0800:  # ICMP
-            self.logger.info("Pacote ICMP capturado.")
-            
-        # Verificando se é ARP
-        # elif ethertype == 0x0806:
-        #     self.logger.info("Pacote ARP capturado.")
-            
+
+        # Filtragem de ICMP
+        if ethertype == 0x0800:  # IPv4
+            self.logger.info("Pacote IPv4 capturado.")
         else:
             self.logger.info(f"Pacote desconhecido com ethertype: {hex(ethertype)}")
-            
+        
         self.logger.info(f"Pacote recebido: SRC={src_mac}, DST={dst_mac}")
 
-        # Atualizar a tabela MAC com contagem de pacotes
+        # Atualizar tabela MAC com contagem de pacotes
         if src_mac not in self.mac_table:
             self.mac_table[src_mac] = 0
         self.mac_table[src_mac] += 1
 
-        self.logger.info(f"Endereço MAC {src_mac} enviou {self.mac_table[src_mac]} pacotes.\nConteúdo do pacote (hex): {pkt[:64].hex()}\n\n")
+        self.logger.info(f"Endereço MAC {src_mac} enviou {self.mac_table[src_mac]} pacotes.")
 
+        # Ações para encaminhamento
         ofp = dp.ofproto
         ofp_parser = dp.ofproto_parser
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
