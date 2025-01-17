@@ -12,10 +12,10 @@ class balancingLoad(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(balancingLoad, self).__init__(*args, **kwargs)
-        self.mac_table = {}  #Dicionário para rastrear pacotes e endereços MAC
-        self.flow_table = {}  # Dicionário para rastrear tráfego por fluxo
-        self.flow_latency = {}  # Armazenar latências por fluxo
-        self.flow_throughput = {}  # Armazenar throughput por fluxo
+        self.mac_table = {}  
+        self.flow_table = {}  
+        self.flow_latency = {}  
+        self.flow_throughput = {}  
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -29,14 +29,13 @@ class balancingLoad(app_manager.RyuApp):
         dp = msg.datapath
         pkt = msg.data
 
-        # Parsing do pacote para extrair informações IP
         pktIP = packet.Packet(msg.data)
         ip = pktIP.get_protocol(ipv4.ipv4)
 
-        if ip:  # Apenas IPv4
+        if ip:  
             flow_key = (ip.src, ip.dst)
 
-            # Inicializar o fluxo se não existir
+            
             if flow_key not in self.flow_table:
                 self.flow_table[flow_key] = {
                     'count': 0,
@@ -45,17 +44,14 @@ class balancingLoad(app_manager.RyuApp):
                     'last_seen': time.time(),
                 }
 
-            # Atualizar contagem e bytes
             self.flow_table[flow_key]['count'] += 1
             self.flow_table[flow_key]['bytes'] += len(pkt)
 
-            # Calcular latência
             current_time = time.time()
             last_seen = self.flow_table[flow_key]['last_seen']
             latency = current_time - last_seen
             self.flow_table[flow_key]['last_seen'] = current_time
 
-            # Calcular throughput (em Mbps)
             elapsed_time = current_time - self.flow_table[flow_key]['first_seen']
             throughput = (self.flow_table[flow_key]['bytes'] * 8) / (elapsed_time * 10**6) if elapsed_time > 0 else 0
 
@@ -65,12 +61,15 @@ class balancingLoad(app_manager.RyuApp):
                             f"Latência: {latency:.6f} s, "
                             f"Throughput: {throughput:.2f} Mbps")
 
-        # Parsing MAC e Ethertype
+
+            if self.flow_table[flow_key]['count'] > 100:  
+                self.logger.info(f"Fluxo {flow_key} excedeu o limite de pacotes. "
+                                f"Considerando redirecionamento para balanceamento.")
+
         src_mac = pkt[6:12].hex()
         dst_mac = pkt[0:6].hex()
         ethertype = int.from_bytes(pkt[12:14], byteorder='big')
 
-        # Filtragem de ICMP
         if ethertype == 0x0800:  # IPv4
             self.logger.info("Pacote IPv4 capturado.")
         else:
@@ -78,16 +77,17 @@ class balancingLoad(app_manager.RyuApp):
         
         self.logger.info(f"Pacote recebido: SRC={src_mac}, DST={dst_mac}")
 
-        # Atualizar tabela MAC com contagem de pacotes
         if src_mac not in self.mac_table:
             self.mac_table[src_mac] = 0
         self.mac_table[src_mac] += 1
 
         self.logger.info(f"Endereço MAC {src_mac} enviou {self.mac_table[src_mac]} pacotes.")
 
-        # Ações para encaminhamento
+
         ofp = dp.ofproto
         ofp_parser = dp.ofproto_parser
+
+  
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
 
         out = ofp_parser.OFPPacketOut(
