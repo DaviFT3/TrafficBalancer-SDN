@@ -1,2 +1,7 @@
 /venv
 /__pycache__
+/mininet
+/oflops
+/oftest
+/openflow
+/pox
