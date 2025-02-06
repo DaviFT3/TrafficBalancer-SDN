@@ -1,75 +1,149 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_0
+from ryu.ofproto import ofproto_v1_3
+from ryu.lib.packet import packet, ethernet
+from ryu.ofproto import ether
+from ryu.lib import hub
+from ryu.topology import event
+import time
 
-from ryu.lib.packet import packet, ethernet, ipv4
-
-class balancingLoad(app_manager.RyuApp):
-    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
+class LatencyBalancer(app_manager.RyuApp):
+    OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(balancingLoad, self).__init__(*args, **kwargs)
-        self.mac_table = {}  #Dicionário para rastrear pacotes e endereços MAC
-        self.flow_table = {}  # Dicionário para rastrear tráfego por fluxo
+        super(LatencyBalancer, self).__init__(*args, **kwargs)
+        self.datapaths = {}
+        self.latency_stats = {}
+        self.monitor_thread = hub.spawn(self._monitor)
+        self.mac_to_port = {}  # Armazena qual porta corresponde a cada MAC
 
 
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def switch_features_handler(self, ev):
-        dp = ev.msg.datapath
-        #self.logger.info(f"Switch {dp.id} adicionado no controlador.\n")
+    @set_ev_cls(ofp_event.EventOFPStateChange, [CONFIG_DISPATCHER, MAIN_DISPATCHER])
+    def _state_change_handler(self, ev):
+        datapath = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.datapaths[datapath.id] = datapath
+        elif ev.state == CONFIG_DISPATCHER:
+            self.datapaths.pop(datapath.id, None)
+
+    def _monitor(self):
+        while True:
+            for datapath in self.datapaths.values():
+                self._request_stats(datapath)
+            hub.sleep(2)
+
+    def _request_stats(self, datapath):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
+        datapath.send_msg(req)
+
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def _port_stats_reply_handler(self, ev):
+        datapath = ev.msg.datapath
+        dpid = datapath.id
+        self.latency_stats.setdefault(dpid, {})
+
+        for stat in ev.msg.body:
+            port_no = stat.port_no
+            tx_bytes = stat.tx_bytes
+            rx_bytes = stat.rx_bytes
+
+            if port_no in self.latency_stats[dpid]:
+                prev_tx, prev_rx, prev_time = self.latency_stats[dpid][port_no]
+                latency = (time.time() - prev_time) * 1000  # Convertendo para ms
+                #self.logger.info(f"Switch {dpid}, Porta {port_no} -> Tempo de atualizacao: {latency:.2f} ms")
+            else:
+                latency = 0  # Inicializa a latência
+
+            self.latency_stats[dpid][port_no] = (tx_bytes, rx_bytes, time.time())
+
+    @set_ev_cls(event.EventSwitchEnter)
+    def _switch_enter_handler(self, ev):
+        switch = ev.switch.dp
+        self.datapaths[switch.id] = switch
+        self.logger.info(f"Switch {switch.id} conectado")
+
+        # Adiciona regras básicas ao switch
+        self.add_default_flows(switch)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def packet_in_handler(self, ev):
+    def _packet_in_handler(self, ev):
         msg = ev.msg
-        dp = msg.datapath
-        pkt = msg.data
-        #ip
-        pktIP = packet.Packet(msg.data)
-        # eth = pktIP.get_protocol(ethernet.ethernet)
+        datapath = msg.datapath
+        in_port = msg.match['in_port']
+        dpid = datapath.id
+        parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
 
-        # Se for IPv4, registre o fluxo
-        ip = pktIP.get_protocol(ipv4.ipv4)
-        if ip:
-            flow_key = (ip.src, ip.dst)
-            #self.logger.info(f"SRC={ip.src}, DST={ip.dst}")
-            if flow_key not in self.flow_table:
-                self.flow_table[flow_key] = {'count': 0, 'bytes': 0}
-            self.flow_table[flow_key]['count'] += 1
-            self.flow_table[flow_key]['bytes'] += len(pkt)  # Contando os bytes
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocol(ethernet.ethernet)
 
-            self.logger.info(f"{flow_key} registrou {self.flow_table[flow_key]['count']} pacotes, {self.flow_table[flow_key]['bytes']} bytes.")
-
-        src_mac = pkt[6:12].hex()
-        dst_mac = pkt[0:6].hex()
-
-        # Filtrando trafego 
-        ethertype = int.from_bytes(pkt[12:14], byteorder='big')
-        if ethertype == 0x0800:  # ICMP
-            self.logger.info("Pacote ICMP capturado.")
+        if eth:
+            src = eth.src  # MAC de origem
+            dst = eth.dst  # MAC de destino
             
-        # Verificando se é ARP
-        # elif ethertype == 0x0806:
-        #     self.logger.info("Pacote ARP capturado.")
-            
-        else:
-            self.logger.info(f"Pacote desconhecido com ethertype: {hex(ethertype)}")
-            
-        self.logger.info(f"Pacote recebido: SRC={src_mac}, DST={dst_mac}")
+            # Armazena a porta onde este MAC foi visto
+            self.mac_to_port.setdefault(dpid, {})
+            self.mac_to_port[dpid][src] = in_port  
 
-        # Atualizar a tabela MAC com contagem de pacotes
-        if src_mac not in self.mac_table:
-            self.mac_table[src_mac] = 0
-        self.mac_table[src_mac] += 1
+            # Se soubermos para onde enviar, instala um fluxo
+            if dst in self.mac_to_port[dpid]:
+                out_port = self.mac_to_port[dpid][dst]
+                self.logger.info(f"Encaminhando tráfego no switch {dpid} de {src} para {dst} via porta {out_port}")
 
-        self.logger.info(f"Endereço MAC {src_mac} enviou {self.mac_table[src_mac]} pacotes.\nConteúdo do pacote (hex): {pkt[:64].hex()}\n\n")
+                # Instala regra no switch para esse destino
+                self.install_flow(datapath, in_port, dst, out_port)
 
-        ofp = dp.ofproto
-        ofp_parser = dp.ofproto_parser
-        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
+                # Encaminha imediatamente o pacote para o destino
+                actions = [parser.OFPActionOutput(out_port)]
+                out = parser.OFPPacketOut(
+                    datapath=datapath,
+                    buffer_id=ofproto.OFP_NO_BUFFER,
+                    in_port=in_port,
+                    actions=actions,
+                    data=msg.data,
+                )
+                datapath.send_msg(out)
+            else:
+                # Caso contrário, envia para todas as portas (flooding)
+                actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
+                out = parser.OFPPacketOut(
+                    datapath=datapath,
+                    buffer_id=ofproto.OFP_NO_BUFFER,
+                    in_port=in_port,
+                    actions=actions,
+                    data=msg.data,
+                )
+                datapath.send_msg(out)
 
-        out = ofp_parser.OFPPacketOut(
-            datapath=dp, buffer_id=msg.buffer_id, in_port=msg.in_port,
-            actions=actions, data=msg.data)
-        dp.send_msg(out)
+    def add_default_flows(self, datapath):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        # Fluxo padrão para enviar pacotes ao controlador
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match, instructions=inst)
+        datapath.send_msg(mod)
+
+        self.logger.info(f"Regras padrão adicionadas ao switch {datapath.id}")
+
+    def install_flow(self, datapath, in_port, dst, out_port):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+        actions = [parser.OFPActionOutput(out_port)]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
+        mod = parser.OFPFlowMod(
+            datapath=datapath, priority=1, match=match, instructions=inst
+        )
+        datapath.send_msg(mod)
+
+        self.logger.info(f"Instalando fluxo: {datapath.id} - {in_port} -> {out_port} para destino {dst}")
