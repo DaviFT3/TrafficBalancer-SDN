@@ -31,17 +31,17 @@ def setup_mininet():
 
     info("Criando links...\n")
     # Conectando switches entre si
-    net.addLink(s1, s2, bw=20)
-    net.addLink(s1, s3, bw=20)
+    net.addLink(s1, s2, bw=20, delay='2ms')
+    net.addLink(s1, s3, bw=20, delay='2ms')
     # net.addLink(s2, s3, bw=20, delay='2ms')
 
     # Conectando hosts aos switches
     for i in range(3):  # h1, h2, h3 -> s1
-        net.addLink(hosts[i], s1, bw=10)
+        net.addLink(hosts[i], s1, bw=10, delay='2ms')
     for i in range(3, 6):  # h4, h5, h6 -> s2
-        net.addLink(hosts[i], s2, bw=10)
+        net.addLink(hosts[i], s2, bw=10, delay='2ms')
     for i in range(6, 9):  # h7, h8, h9 -> s3
-        net.addLink(hosts[i], s3, bw=10)
+        net.addLink(hosts[i], s3, bw=10, delay='2ms')
     
 
 
